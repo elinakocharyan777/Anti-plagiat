@@ -1,0 +1,47 @@
+services:
+  filestorage:
+    build:
+      context: .
+      dockerfile: FileStorageService/Dockerfile
+    container_name: antiplagiat-filestorage
+    ports:
+      - "5037:5037"
+    volumes:
+      - filestorage_data:/app/StoredFiles
+    restart: unless-stopped
+
+  analysis:
+    build:
+      context: .
+      dockerfile: AnalysisService/Dockerfile
+    container_name: antiplagiat-analysis
+    ports:
+      - "5027:5027"
+    environment:
+      # чтобы AnalysisService мог скачать файл и посчитать хэш
+      FileStorage__BaseUrl: "http://filestorage:5037"
+    volumes:
+      - analysis_data:/data
+    depends_on:
+      - filestorage
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: ApiGateway/Dockerfile
+    container_name: antiplagiat-gateway
+    ports:
+      - "5036:5036"
+    environment:
+      # переопределяем appsettings.json для Docker-сети (container-name вместо localhost)
+      Services__FileStorage: "http://filestorage:5037"
+      Services__Analysis: "http://analysis:5027"
+    depends_on:
+      - filestorage
+      - analysis
+    restart: unless-stopped
+
+volumes:
+  filestorage_data:
+  analysis_data:
