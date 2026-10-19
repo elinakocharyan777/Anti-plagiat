@@ -1,116 +1,118 @@
-# Кочарян Элина Самвеловна БПИ-244
-# AntiPlagiat  — микросервисная система проверки работ
+# AntiPlagiat
 
-Проект реализует MVP информационной системы для
-- хранения присланных студентами файлов (работ)
-- фиксации факта сдачи и формирования отчёта «плагиат/не плагиат»
-- получения аналитики по всем сдачам по конкретному заданию
+Учебная микросервисная система на **C# / .NET 8** для загрузки студенческих работ и поиска точных совпадений файлов по **SHA-256**.
+
+Система сравнивает содержимое файлов в рамках одного задания и формирует отчёт. Она не определяет смысловое сходство, перефразирование или процент заимствования. Поле `isPlagiarism` обозначает обнаруженное точное совпадение с более ранней работой другого студента.
+
+## Возможности
+
+- Загрузка файла с идентификаторами студента и задания через API Gateway.
+- Хранение файлов и скачивание по идентификатору.
+- Сравнение SHA-256 с ранее загруженными работами по тому же заданию.
+- Список сдач по заданию и подробный отчёт по сдаче.
+- Swagger-интерфейсы трёх сервисов.
 
 ## Архитектура
 
-Система состоит из 3 сервисов:
+```mermaid
+flowchart LR
+    Client[Swagger / curl] --> Gateway[API Gateway]
+    Gateway --> Storage[FileStorageService]
+    Gateway --> Analysis[AnalysisService]
+    Analysis --> Storage
+    Analysis --> DB[(SQLite)]
+    Storage --> Files[(Файлы на диске)]
+```
 
-1) **ApiGateway** (порт **5036**) - единственная точка входа для клиента
-- принимает запросы от пользователя
-- вызывает **FileStorageService** для загрузки файла
-- вызывает **AnalysisService** для создания сдачи и получения отчётов
-- если внутренний сервис недоступен то возвращает **503 Service Unavailable**
+| Компонент | Назначение |
+|---|---|
+| ApiGateway | Единая точка входа и вызовы внутренних API |
+| FileStorageService | Запись и выдача файлов |
+| AnalysisService | Сдачи, вычисление хэша и отчёты |
+| Shared | Общие DTO |
 
-2) **FileStorageService** (порт **5037**) - хранение и выдача файлов
-- `POST /api/Files` - загрузка 
-- `GET /api/Files/{id}` - скачивание
+Стек: ASP.NET Core Web API, Entity Framework Core, SQLite, HttpClient, SHA-256, Swagger/OpenAPI, Docker Compose.
 
-3) **AnalysisService** (порт **5027**) - хранение сдач, анализ (антиплагиат) и выдача отчётов
-- использует SQLite (файл `analysis.db` внутри контейнера, сохраняется в volume)
-- `POST /api/Submissions` - создать сдачу + сразу сформировать отчёт
-- `GET /api/Submissions/by-assignment/{assignmentId}` - список сдач по заданию
-- `GET /api/Submissions/{id}/report` - подробный отчёт по сдаче
+## Запуск через Docker
 
-## Алгоритм определения плагиата
+Нужны Git и запущенный Docker Desktop. Порты 5036, 5037 и 5027 должны быть свободны.
 
-**Идея:** две работы считаются совпадающими, если у них одинаковый **SHA256-хэш содержимого файла**
+```bash
+git clone https://github.com/elinakocharyan777/anti-plagiat.git anti-plagiat
+cd anti-plagiat
+docker compose up -d --build
+docker compose ps
+```
 
-Для новой сдачи система делает:
-1) скачивает файл из FileStorageService по `FileId`
-2) вычисляет SHA256-хэш;
-3) ищет в базе **более раннюю** сдачу по тому же `AssignmentId`, но от **другого** студента, с тем же хэшем
-4) если такая сдача найдена то `IsPlagiarism = true`, `OriginalSubmissionId = <id более ранней сдачи>`
+Если папка уже скачана, начни с `docker compose up -d --build` внутри неё. Имя репозитория при публикации должно совпадать с адресом выше.
 
+| Сервис | Swagger |
+|---|---|
+| Gateway | http://localhost:5036/swagger |
+| File Storage | http://localhost:5037/swagger |
+| Analysis | http://localhost:5027/swagger |
 
-## User flow 
+Логи: `docker compose logs --tail=100`. Остановка: `docker compose stop`.
 
-### 1- студент отправляет работу на проверку
-1) Клиент -> ApiGateway: `POST /api/Works` (multipart/form-data: studentId, assignmentId, file)
-2) ApiGateway -> FileStorageService: `POST /api/Files` (загрузка файла)
-3) ApiGateway -> AnalysisService: `POST /api/Submissions` (создание сдачи + запуск анализа)
-4) AnalysisService -> FileStorageService: `GET /api/Files/{fileId}` (скачивание и подсчёт SHA256)
-5) ApiGateway -> клиент: ответ с `submissionId` + флагом `isPlagiarism`
+В Compose предусмотрены тома для SQLite и файлов. При этом индекс метаданных файлов хранится только в памяти: после перезапуска FileStorageService ранее загруженные файлы могут стать недоступны через API, даже если их содержимое осталось на диске.
 
-### 2- преподаватель получает аналитику по заданию
-1) Клиент -> ApiGateway: `GET /api/Works/{assignmentId}/reports`
-2) ApiGateway -> AnalysisService: `GET /api/Submissions/by-assignment/{assignmentId}`
-3) ApiGateway -> клиент: список сдач по заданию со статусами и `isPlagiarism`
+## Пример проверки
 
-### 3- преподаватель получает подробный отчёт по конкретной сдаче
-1) Клиент -> ApiGateway: `GET /api/Works/submissions/{submissionId}/report`
-2) ApiGateway -> AnalysisService: `GET /api/Submissions/{id}/report`
-3) ApiGateway -> клиент: подробный отчёт (hash, isPlagiarism, originalSubmissionId, timestamps)
+Из корня проекта в Terminal на macOS/Linux выполни:
 
-## Обработка ошибок 
-- Если FileStorageService или AnalysisService не отвечает, ApiGateway возвращает `503 Service Unavailable`
-  и сообщение о недоступности внутреннего сервиса
+```bash
+# Первая работа
+curl -X POST 'http://localhost:5036/api/Works' \
+  -F 'studentId=s1' -F 'assignmentId=demo-1' \
+  -F 'file=@examples/original.txt'
 
-## Как запускать
+# Тот же файл от другого студента
+curl -X POST 'http://localhost:5036/api/Works' \
+  -F 'studentId=s2' -F 'assignmentId=demo-1' \
+  -F 'file=@examples/original.txt'
 
-#### через Visual Studio
-1. Открой решение (Solution) в Visual Studio
-2. ПКМ по Solution → **Properties**
-3. Выбери **Multiple startup projects**
-4. Для проектов:
-   - `FileStorageService` → Start
-   - `AnalysisService` → Start
-   - `ApiGateway` → Start
-5. Нажми **Apply → OK**
-6. Запусти F5
+# Другой файл
+curl -X POST 'http://localhost:5036/api/Works' \
+  -F 'studentId=s3' -F 'assignmentId=demo-1' \
+  -F 'file=@examples/different.txt'
 
-#### через терминал
-- Открываем 3 терминала в папке проекта
-1) cd FileStorageService
-dotnet run
-2) cd AnalysisService
-dotnet run
-3) cd ApiGateway
-dotnet run
-- Открываем Swagger:
-http://localhost:5036/swagger
+# Все отчёты по заданию
+curl 'http://localhost:5036/api/Works/demo-1/reports'
+```
 
+Для нового задания ожидаются значения `isPlagiarism`: `false`, `true`, `false`. У второй сдачи `originalSubmissionId` указывает на первую. Для повторения сценария используй новый `assignmentId`.
 
-## Swagger доступен по адресам:
+Подробный отчёт: `GET /api/Works/submissions/{submissionId}/report`. Идентификатор возьми из ответа загрузки.
 
-- ApiGateway: http://localhost:5036/swagger
+## Структура
 
-- AnalysisService: http://localhost:5027/swagger
+```text
+AntiPlagiat.sln
+ApiGateway/
+AnalysisService/
+FileStorageService/
+Shared/
+examples/
+docs/
+docker-compose.yml
+```
 
-- FileStorageService: http://localhost:5037/swagger
+## Проверка и ограничения
 
-## Хранение 
-- файлы работ хранятся в FileStorageService (Docker в volume)
-- результаты анализа и сдачи хранятся в AnalysisService (SQLite `analysis.db`, Docker в volume)
+Решение собрано в .NET SDK 8.0: 0 ошибок, 1 предупреждение. Основные API-сценарии проверены запуском собранных сервисов в изолированном Docker-окружении. Полная сборка образов штатными Dockerfile в рамках этой проверки не выполнялась.
 
-## Примеры запросов 
+Известные проблемы исходной версии:
 
-### Загрузить работу (через Gateway)
-`POST http://localhost:5036/api/Works`
+- Ошибка скачивания файла скрывается: вместо SHA-256 используется FileId и создаётся отчёт со статусом `DONE`. Это нельзя считать успешной проверкой.
+- Метаданные файлов хранятся в памяти и не восстанавливаются после перезапуска.
+- Gateway превращает ответ 404 от AnalysisService в 503.
+- Нет аутентификации и разграничения доступа; идентификатор студента передаёт клиент.
+- Параллельная загрузка одинаковых работ требует отдельного тестирования; текущая проверка и сохранение не обеспечивают сериализацию таких запросов.
 
-Формат: `multipart/form-data`
-- `studentId` (string)
-- `assignmentId` (string)
-- `file` (file)
+[Результаты проверки и приоритеты исправлений](docs/verification.md). Автоматизированных тестов и CI пока нет.
 
-Пример (Windows PowerShell):
-```powershell
-curl -X POST "http://localhost:5036/api/Works" `
-  -F "studentId=s1" `
-  -F "assignmentId=task-1" `
-  -F "file=@./test.txt"
+## Автор и происхождение
 
+Элина Кочарян. Учебный проект по конструированию программного обеспечения.
+
+[Исходный PR #4](https://github.com/elinakocharyan777/Dz-KPO/pull/4). История файлов выделена из подпапки `kpo-dz3/AntiPlagiat`; идентификаторы коммитов изменились. [Первоначальный учебный отчёт](docs/coursework-original.md) сохранён для контекста; актуальные ограничения описаны выше.
